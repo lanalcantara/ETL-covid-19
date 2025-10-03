@@ -1,90 +1,115 @@
 import pandas as pd
+import numpy as np
+from pathlib import Path
 
 # --- Configurações ---
-INPUT_FILE = "data/covid_bruto.csv"
-OUTPUT_FILE = "data/covid_transformado.csv"
+DATA_DIR = Path("data")
+RAW_DIR = DATA_DIR / "raw"
+PROCESSED_DIR = DATA_DIR / "processed"
 
-def load_data(file_path: str) -> pd.DataFrame:
-    """Carrega o DataFrame bruto, garantindo a tipagem da coluna 'Data'."""
-    print(f"1. Carregando dados brutos de: {file_path}")
-    try:
-        # Carrega o CSV e garante que a coluna 'Data' é do tipo datetime
-        df = pd.read_csv(file_path, parse_dates=['Data'])
-        print(f"Dados brutos carregados. Linhas: {len(df)}")
-        return df
-    except FileNotFoundError:
-        print(f"ERRO: Arquivo {file_path} não encontrado. Execute a extração primeiro.")
-        return pd.DataFrame()
+RAW_DIR.mkdir(parents=True, exist_ok=True)
+PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
 
-def transform_data(df: pd.DataFrame) -> pd.DataFrame:
-    """Aplica regras de limpeza, padronização e cria colunas de agregação."""
-    if df.empty:
-        return df
+INDIC_FILE = RAW_DIR / "indicadores_completo.csv"
+COVID_FILE = PROCESSED_DIR / "covid_completo.csv"
+OUTPUT_FILE = PROCESSED_DIR / "analise_final.csv"
 
-    print("2. Aplicando transformações e limpeza...")
-    
-    # 2.1 Tratamento de Valores Faltantes (NaN) e Ajuste de Tipos
-    
-    # Colunas que devem ser inteiras (não podem ter valores flutuantes/decimais)
-    integer_cols = [
-        'Casos_Total', 'Mortes_Total', 'Recuperados_Total',
-        'Novos_Casos', 'Novas_Mortes', 'Novos_Recuperados'
-    ]
-    
-    # Preenche valores NaN nessas colunas com 0 (assumindo que NaN significa 0 casos/mortes)
-    df[integer_cols] = df[integer_cols].fillna(0)
-    
-    # Converte as colunas para o tipo inteiro (int), após o tratamento de NaN
-    # Usamos pd.Int64Dtype() para lidar com valores grandes e permitir NaN temporariamente
-    for col in integer_cols:
-         df[col] = df[col].astype('Int64')
+# --- Países que serão usados ---
+COUNTRIES = [
+    "Brazil","United States","India","China",
+    "United Kingdom","Germany","France",
+    "South Africa","Mexico"
+]
 
-    # 2.2 Filtragem de Dados (Remover Ruídos)
-    
-    # Remover linhas onde novos casos ou mortes são negativos.
-    # Isso geralmente é um artefato da fonte de dados (correção de relatórios passados).
-    initial_rows = len(df)
-    df = df[
-        (df['Novos_Casos'] >= 0) & 
-        (df['Novas_Mortes'] >= 0) &
-        (df['Novos_Recuperados'] >= 0)
-    ]
-    removed_rows = initial_rows - len(df)
-    if removed_rows > 0:
-        print(f"   -> {removed_rows} linhas removidas devido a valores diários negativos.")
+# --- Parâmetros de geração sintética ---
+BASE_NEW_CASES = {
+    "United States": 60000, "Brazil": 45000, "India": 40000,
+    "China": 2000, "United Kingdom": 15000, "Germany": 12000,
+    "France": 11000, "South Africa": 7000, "Mexico": 8000
+}
 
-    # 2.3 Criação de Colunas de Agregação e Análise
-    
-    # Casos Ativos (Total - Mortes - Recuperados)
-    # É importante usar .clip(lower=0) pois o cálculo pode resultar em negativos em dados brutos.
-    df['Casos_Ativos'] = (df['Casos_Total'] - df['Mortes_Total'] - df['Recuperados_Total']).clip(lower=0)
-    
-    # Taxa de Mortalidade (Mortes Totais / Casos Totais) - Expressa em %
-    # Usamos .replace(0, pd.NA) para evitar divisão por zero em Casos_Total = 0
-    df['Taxa_Mortalidade (%)'] = (
-        (df['Mortes_Total'] / df['Casos_Total'].replace(0, pd.NA)) * 100
-    )
-    
-    print(f"Transformação concluída. Linhas finais: {len(df)}")
-    return df
+CFR = {  # case fatality rate estimado
+    "United States": 0.015, "Brazil": 0.02, "India": 0.01,
+    "China": 0.005, "United Kingdom": 0.017, "Germany": 0.014,
+    "France": 0.016, "South Africa": 0.018, "Mexico": 0.02
+}
 
-def save_deliverable(df: pd.DataFrame, file_path: str):
-    """Salva o DataFrame transformado."""
-    if df.empty:
-        print("Nenhum dado para salvar.")
-        return
+def generate_covid_data():
+    dates = pd.date_range(start="2020-01-01", end="2021-12-31", freq="D")
+    rows = []
+    np.random.seed(42)
 
-    print(f"3. Salvando dados limpos em: {file_path}")
-    df.to_csv(file_path, index=False, encoding='utf-8')
-    print("Transformação concluída com sucesso!")
+    for country in COUNTRIES:
+        base = BASE_NEW_CASES.get(country, 1000)
+        t = np.arange(len(dates))
+        # duas ondas (2020 e 2021)
+        center1 = (pd.to_datetime("2020-08-01") - dates[0]).days
+        center2 = (pd.to_datetime("2021-06-15") - dates[0]).days
+        sigma1, sigma2 = 60, 70
 
+        wave1 = np.exp(-0.5 * ((t - center1) / sigma1)**2)
+        wave2 = np.exp(-0.5 * ((t - center2) / sigma2)**2)
+        seasonal = 1 + 0.1 * np.sin(2 * np.pi * t / 180)
+        noise = np.random.normal(0, 0.2, size=len(dates))
+
+        new_cases = base * (0.1 + 2.5*wave1 + 3.0*wave2) * seasonal * (1 + noise)
+        new_cases = np.clip(new_cases, 0, None).round().astype(int)
+
+        new_deaths = (new_cases * CFR.get(country, 0.01)).round().astype(int)
+        cum_cases = np.cumsum(new_cases)
+        cum_deaths = np.cumsum(new_deaths)
+
+        for date, c_cases, c_deaths, n_cases in zip(dates, cum_cases, cum_deaths, new_cases):
+            rows.append({
+                "country": country,
+                "date": date,
+                "cases": int(c_cases),
+                "deaths": int(c_deaths),
+                "new_cases": int(n_cases)
+            })
+
+    return pd.DataFrame(rows)
+
+def transform_and_merge(df_covid, df_ind):
+    df_covid = df_covid.sort_values(["country","date"]).reset_index(drop=True)
+
+    # crescimento diário (%)
+    df_covid["cases_prev"] = df_covid.groupby("country")["cases"].shift(1)
+    df_covid["growth_rate_pct"] = ((df_covid["cases"] - df_covid["cases_prev"]) /
+                                   df_covid["cases_prev"]).replace([np.inf,-np.inf], np.nan) * 100
+    df_covid["growth_rate_pct"] = df_covid["growth_rate_pct"].fillna(0)
+
+    # média móvel 7 dias
+    df_covid["ma7_new_cases"] = df_covid.groupby("country")["new_cases"] \
+        .rolling(window=7, min_periods=1).mean().reset_index(level=0, drop=True)
+
+    # merge com indicadores
+    df_covid["year"] = df_covid["date"].dt.year
+    df_ind["year"] = pd.to_datetime(df_ind["date"]).dt.year
+    df_final = pd.merge(df_covid, df_ind.drop(columns=["date"]), on=["country","year"], how="left")
+
+    # organizar colunas
+    cols = ["country","date","year","cases","deaths","new_cases",
+            "growth_rate_pct","ma7_new_cases",
+            "gdp","unemployment_rate","poverty_rate",
+            "health_spending_gdp","life_expectancy","education_index"]
+    for c in cols:
+        if c not in df_final.columns:
+            df_final[c] = None
+
+    return df_final[cols]
 
 if __name__ == "__main__":
-    # 1. Carregar
-    df_bruto = load_data(INPUT_FILE)
-    
-    # 2. Transformar
-    df_transformado = transform_data(df_bruto)
-    
-    # 3. Salvar
-    save_deliverable(df_transformado, OUTPUT_FILE)
+    print("📥 Gerando dados COVID sintéticos...")
+    df_covid = generate_covid_data()
+    df_covid.to_csv(COVID_FILE, index=False)
+    print(f"✅ covid_completo salvo em {COVID_FILE}")
+
+    print("📥 Lendo indicadores...")
+    df_ind = pd.read_csv(INDIC_FILE)
+
+    print("🔄 Transformando e unindo dados...")
+    df_final = transform_and_merge(df_covid, df_ind)
+
+    df_final.to_csv(OUTPUT_FILE, index=False)
+    print(f"✅ analise_final salvo em {OUTPUT_FILE} ({len(df_final)} linhas)")
