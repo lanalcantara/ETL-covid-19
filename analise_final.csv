@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Criar um dataset COVID sintético para vários países (2020-01-01 a 2021-12-31),
 # mesclar com o indicadores_completo.csv existente e gerar analise_final.csv
 import pandas as pd
@@ -154,3 +155,161 @@ top_cum = last.sort_values("cases", ascending=False)[["country","cases","deaths"
 # retornar objetos para o usuário visualizar
 head, tail, top_cum, summary
 
+=======
+# Criar um dataset COVID sintético para vários países (2020-01-01 a 2021-12-31),
+# mesclar com o indicadores_completo.csv existente e gerar analise_final.csv
+import pandas as pd
+import numpy as np
+from pathlib import Path
+
+# caminhos
+IND_PATH = Path("/mnt/data/indicadores_completo.csv")
+COVID_OUT = Path("/mnt/data/covid_completo.csv")
+ANALISE_OUT = Path("/mnt/data/analise_final.csv")
+
+# países (devem bater com indicadores)
+countries = ["Brazil","United States","India","China","United Kingdom","Germany","France","South Africa","Mexico"]
+
+# datas
+dates = pd.date_range(start="2020-01-01", end="2021-12-31", freq="D")
+
+# parametrização por país (amplitude base para novos casos diários)
+base_new_cases = {
+    "United States": 60000,
+    "Brazil": 45000,
+    "India": 40000,
+    "China": 2000,
+    "United Kingdom": 15000,
+    "Germany": 12000,
+    "France": 11000,
+    "South Africa": 7000,
+    "Mexico": 8000
+}
+
+# CFR (case fatality rate) estimada por país (novamente, só exemplo sintético)
+cfr = {
+    "United States": 0.015,
+    "Brazil": 0.02,
+    "India": 0.01,
+    "China": 0.005,
+    "United Kingdom": 0.017,
+    "Germany": 0.014,
+    "France": 0.016,
+    "South Africa": 0.018,
+    "Mexico": 0.02
+}
+
+rows = []
+np.random.seed(42)
+
+for country in countries:
+    base = base_new_cases.get(country, 1000)
+    # criar dois picos (ondas): meio de 2020 e meio de 2021
+    # usar curvas gaussianas para os picos
+    t = np.arange(len(dates))
+    # central points for waves
+    center1 = (pd.to_datetime("2020-08-01") - dates[0]).days
+    center2 = (pd.to_datetime("2021-06-15") - dates[0]).days
+    sigma1 = 40 + np.random.randint(-10,40)
+    sigma2 = 50 + np.random.randint(-10,40)
+    wave1 = np.exp(-0.5 * ((t - center1) / sigma1)**2)
+    wave2 = np.exp(-0.5 * ((t - center2) / sigma2)**2)
+    # seasonal small sine
+    seasonal = 1 + 0.1 * np.sin(2 * np.pi * t / 180)
+    # noise
+    noise = np.random.normal(loc=0.0, scale=0.2, size=len(dates))
+    # compose daily new cases
+    new_cases = base * (0.1 + 2.5*wave1 + 3.0*wave2) * seasonal * (1 + noise)
+    # ensure positive
+    new_cases = np.clip(new_cases, a_min=0, a_max=None)
+    # small random day-to-day jitter
+    new_cases = np.round(new_cases).astype(int)
+    # recoveries: assume a fraction of new_cases recover after some days (not calculated here, just cumulative approx)
+    new_deaths = np.round(new_cases * cfr.get(country, 0.01)).astype(int)
+    # cumulative
+    cum_cases = np.cumsum(new_cases)
+    cum_deaths = np.cumsum(new_deaths)
+    # build rows
+    for date, c_cases, c_deaths, n_cases in zip(dates, cum_cases, cum_deaths, new_cases):
+        rows.append({
+            "country": country,
+            "date": date,
+            "cases": int(c_cases),
+            "deaths": int(c_deaths),
+            "new_cases": int(n_cases)
+        })
+
+df_covid = pd.DataFrame(rows)
+
+# salvar covid_completo.csv
+df_covid.to_csv(COVID_OUT, index=False)
+
+# ler indicadores (se existir)
+if IND_PATH.exists():
+    df_ind = pd.read_csv(IND_PATH, parse_dates=["date"])
+else:
+    # fallback: construir uma versão pequena se o arquivo não existe
+    df_ind = pd.DataFrame({
+        "country": ["Brazil","United States","India","China","United Kingdom","Germany","France","South Africa","Mexico"],
+        "date": [pd.to_datetime("2020-01-01")] * 9,
+        "gdp": [1.44e12, 2.14e13, 2.87e12, 1.47e13, 2.83e12, 3.85e12, 2.72e12, 3.51e11, 1.27e12],
+        "unemployment_rate": [13.9,8.1,9.8,5.2,4.5,3.8,8.0,28.7,4.7],
+        "poverty_rate": [26.5,10.5,22.3,1.7,11.2,10.9,14.5,33.0,41.9],
+        "health_spending_gdp":[9.5,16.9,3.9,5.3,10.0,11.2,11.3,8.1,6.0],
+        "life_expectancy":[75.9,78.9,70.8,77.4,81.3,80.9,82.5,64.1,75.1],
+        "education_index":[0.71,0.92,0.65,0.76,0.91,0.94,0.90,0.70,0.76],
+    })
+    df_ind["date"] = pd.to_datetime(df_ind["date"])
+
+# agora criar analise_final - aplicar transformações
+df = df_covid.copy()
+# parse dates
+df["date"] = pd.to_datetime(df["date"])
+# ordenar
+df = df.sort_values(["country","date"]).reset_index(drop=True)
+# calcular crescimento diário sobre cumulative cases - cuidado com division by zero
+df["cases_prev"] = df.groupby("country")["cases"].shift(1)
+df["growth_rate_pct"] = ((df["cases"] - df["cases_prev"]) / df["cases_prev"]).replace([np.inf, -np.inf], np.nan) * 100
+df["growth_rate_pct"] = df["growth_rate_pct"].fillna(0)
+# calcular média móvel de 7 dias sobre new_cases (mais sensato)
+df["ma7_new_cases"] = df.groupby("country")["new_cases"].rolling(window=7, min_periods=1).mean().reset_index(level=0, drop=True)
+# adicionar ano para merge com indicadores
+df["year"] = df["date"].dt.year
+# preparar indicadores com year
+df_ind["year"] = df_ind["date"].dt.year
+# merge por country + year (indicadores anuais)
+df_final = pd.merge(df, df_ind.drop(columns=["date"]), on=["country","year"], how="left", suffixes=("","_ind"))
+
+# reorganizar colunas e salvar
+cols_order = ["country","date","year","cases","deaths","new_cases","growth_rate_pct","ma7_new_cases",
+              "gdp","unemployment_rate","poverty_rate","health_spending_gdp","life_expectancy","education_index"]
+# garantir que existam as colunas
+for c in cols_order:
+    if c not in df_final.columns:
+        df_final[c] = None
+
+df_final = df_final[cols_order]
+df_final.to_csv(ANALISE_OUT, index=False)
+
+# mostrar resumo
+summary = {
+    "covid_rows": len(df_covid),
+    "analise_rows": len(df_final),
+    "covid_file": str(COVID_OUT),
+    "analise_file": str(ANALISE_OUT)
+}
+
+# exibir primeiras linhas e top countries at final date
+head = df_final.head(6)
+tail = df_final.tail(6)
+
+# top cumulative cases by country on final date
+last_date = df_final["date"].max()
+last = df_final[df_final["date"]==last_date].copy()
+top_cum = last.sort_values("cases", ascending=False)[["country","cases","deaths","gdp"]].head(10)
+
+# salvar alguns arquivos auxiliares para download (already saved)
+# retornar objetos para o usuário visualizar
+head, tail, top_cum, summary
+
+>>>>>>> a019aa29b526f81ccda577d52c06fe132923200c

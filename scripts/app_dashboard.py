@@ -4,6 +4,7 @@ import altair as alt
 
 st.set_page_config(layout="wide", page_title="Dashboard COVID")
 
+<<<<<<< HEAD
 st.title("📊 Análise Integrada: COVID-19 e Indicadores Globais")
 
 # 1. Carregar dados
@@ -16,6 +17,13 @@ df["Periodo"] = pd.to_datetime(df["Periodo"])
 
 # Limpeza e preparo para análise de correlação
 df.columns = df.columns.str.lower() # Padroniza todas as colunas para minúsculo
+=======
+st.title("📊 Dashboard COVID-19")
+
+# 1. Carregar dados
+df = pd.read_csv("data/base_final_analise.csv")
+df["periodo"] = pd.to_datetime(df["periodo"])
+>>>>>>> a019aa29b526f81ccda577d52c06fe132923200c
 
 # 2. Filtros na barra lateral
 paises = sorted(df["pais"].unique())
@@ -24,6 +32,7 @@ pais = st.sidebar.selectbox("Selecione o país", options=paises)
 # Filtrar dataset
 df_sel = df[df["pais"] == pais]
 
+<<<<<<< HEAD
 st.header(f"País Selecionado: {pais}")
 st.markdown("---")
 
@@ -82,3 +91,25 @@ st.altair_chart(scatter_chart, use_container_width=True)
 st.markdown("---")
 st.subheader("Tabela de Dados Brutos (Amostra)")
 st.dataframe(df_sel)
+=======
+# 3. Gráfico de casos confirmados ao longo do tempo
+st.subheader(f"Casos Confirmados – {pais}")
+chart_casos = alt.Chart(df_sel).mark_line(color="blue").encode(
+    x="periodo:T",
+    y="casos_confirmados:Q"
+)
+st.altair_chart(chart_casos, use_container_width=True)
+
+# 4. Gráfico de óbitos ao longo do tempo
+st.subheader(f"Óbitos – {pais}")
+chart_obitos = alt.Chart(df_sel).mark_line(color="red").encode(
+    x="periodo:T",
+    y="obitos:Q"
+)
+st.altair_chart(chart_obitos, use_container_width=True)
+
+# 5. Tabela resumo
+st.subheader("Resumo por período")
+st.dataframe(df_sel)
+
+>>>>>>> a019aa29b526f81ccda577d52c06fe132923200c
